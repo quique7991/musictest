@@ -20,10 +20,13 @@
 package org.onap.music.mdbc;
 
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.LongSummaryStatistics;
 import org.onap.music.mdbc.TestUtils.MriRow;
 
 public class ParallelTest {
-    final int REPLICATION_FACTOR=1;
+    final int REPLICATION_FACTOR=3;
     final private TestUtils utils;
     final private MriRow row;
 
@@ -35,11 +38,15 @@ public class ParallelTest {
     }
 
     public void addTxDigest(int size){
+        System.out.println("Starting tx digest");
         utils.hardcodedAddtransaction(size);
+        System.out.println("Ending tx digest");
     }
 
     public void appendToRedo(){
+        System.out.println("Starting redo append");
         utils.hardcodedAppendToRedo(row);
+        System.out.println("Ending redo append");
     }
 
     public void testMethod() {
@@ -66,12 +73,20 @@ public class ParallelTest {
     }
 
     public static void main(String[] args){
+        List<Long> values=new ArrayList<>();
+        int iterations = 100;
         ParallelTest test = new ParallelTest("rangeTable");
-        long time = System.nanoTime();
-        test.testMethod();
-        long nanosecondTime = System.nanoTime() - time;
-        long millisecond = nanosecondTime/1000000;
-        System.out.println(millisecond + "ms");
+        for(int iter=0;iter<iterations;iter++) {
+            long time = System.nanoTime();
+            test.testMethod();
+            long nanosecondTime = System.nanoTime() - time;
+            long millisecond = nanosecondTime / 1000000;
+            values.add(millisecond);
+        }
+        final LongSummaryStatistics longSummaryStatistics = values.stream().mapToLong((x) -> x).summaryStatistics();
+        System.out.println("Min:"+longSummaryStatistics.getMin() + "ms");
+        System.out.println("Average:"+longSummaryStatistics.getAverage() + "ms");
+        System.out.println("Max:"+longSummaryStatistics.getMax() + "ms");
     }
 
 }
