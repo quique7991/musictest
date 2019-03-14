@@ -32,6 +32,8 @@ public class ParallelTest {
     final private MriRow row;
     final private Boolean USE_CRITICAL=true;
     final private Boolean PRINT=false;
+    final private Boolean RUN_TX_DIGEST=false;
+    final private Boolean RUN_REDO=true;
     final private String TX_DIGEST="DIGEST";
     final private String REDO_LOG="REDO";
 
@@ -70,22 +72,28 @@ public class ParallelTest {
     }
 
     public void testMethod() {
-        Thread t1;
-        Thread t2;
+        Thread t1=null;
+        Thread t2=null;
 
         final Runnable insertDigestCallable = () -> addTxDigest(110);
 
-        t1 = new Thread(insertDigestCallable);
-        t1.start();
+        if(RUN_TX_DIGEST) {
+            t1 = new Thread(insertDigestCallable);
+            t1.start();
+        }
 
         final Runnable appendCallable = () -> appendToRedo();
 
-        t2 = new Thread(appendCallable);
-        t2.start();
+        if(RUN_REDO) {
+            t2 = new Thread(appendCallable);
+            t2.start();
+        }
 
         try {
-            t1.join();
-            t2.join();
+            if(RUN_TX_DIGEST)
+                t1.join();
+            if(RUN_REDO)
+                t2.join();
         } catch (InterruptedException e) {
             e.printStackTrace();
             System.exit(1);
