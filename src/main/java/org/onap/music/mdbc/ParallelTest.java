@@ -20,17 +20,25 @@
 package org.onap.music.mdbc;
 
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.LongSummaryStatistics;
+import java.util.*;
+
 import org.onap.music.mdbc.TestUtils.MriRow;
 
 public class ParallelTest {
+
+    final public Map<String,List<Long>> results;
     final int REPLICATION_FACTOR=3;
     final private TestUtils utils;
     final private MriRow row;
+    final private Boolean USE_CRITICAL=true;
+    final private Boolean PRINT=false;
+    final private String TX_DIGEST="DIGEST";
+    final private String REDO_LOG="REDO";
 
     public ParallelTest(String rangeTableName) {
+        results = new HashMap<>();
+        results.put(TX_DIGEST,new ArrayList<>());
+        results.put(REDO_LOG,new ArrayList<>());
         utils=new TestUtils(REPLICATION_FACTOR);
         utils.createMusicRangeInformationTable();
         utils.createMusicTxDigest();
@@ -38,15 +46,27 @@ public class ParallelTest {
     }
 
     public void addTxDigest(int size){
-        System.out.println("Starting tx digest");
+        long time = System.nanoTime();
+        if(PRINT)
+            System.out.println("Starting tx digest");
         utils.hardcodedAddtransaction(size);
-        System.out.println("Ending tx digest");
+        if(PRINT)
+            System.out.println("Ending tx digest");
+        long nanosecondTime = System.nanoTime() - time;
+        long millisecond = nanosecondTime / 1000000;
+        results.get(TX_DIGEST).add(millisecond);
     }
 
     public void appendToRedo(){
-        System.out.println("Starting redo append");
-        utils.hardcodedAppendToRedo(row);
-        System.out.println("Ending redo append");
+        long time = System.nanoTime();
+        if(PRINT)
+            System.out.println("Starting redo append");
+        utils.hardcodedAppendToRedo(row,USE_CRITICAL);
+        if(PRINT)
+            System.out.println("Ending redo append");
+        long nanosecondTime = System.nanoTime() - time;
+        long millisecond = nanosecondTime / 1000000;
+        results.get(REDO_LOG).add(millisecond);
     }
 
     public void testMethod() {
@@ -84,9 +104,17 @@ public class ParallelTest {
             values.add(millisecond);
         }
         final LongSummaryStatistics longSummaryStatistics = values.stream().mapToLong((x) -> x).summaryStatistics();
+        System.out.println("Total");
         System.out.println("Min:"+longSummaryStatistics.getMin() + "ms");
         System.out.println("Average:"+longSummaryStatistics.getAverage() + "ms");
         System.out.println("Max:"+longSummaryStatistics.getMax() + "ms");
+        for(Map.Entry<String,List<Long>> e:test.results.entrySet()){
+            System.out.println(e.getKey());
+            LongSummaryStatistics longSummaryStatisticsTemp = e.getValue().stream().mapToLong((x) -> x).summaryStatistics();
+            System.out.println("Min:"+longSummaryStatisticsTemp.getMin() + "ms");
+            System.out.println("Average:"+longSummaryStatisticsTemp.getAverage() + "ms");
+            System.out.println("Max:"+longSummaryStatisticsTemp.getMax() + "ms");
+        }
     }
 
 }

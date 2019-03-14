@@ -108,7 +108,7 @@ public class TestUtils {
         }
     }
 
-    public void hardcodedAppendToRedo(MriRow row){
+    public void hardcodedAppendToRedo(MriRow row, Boolean useCritical) {
         final UUID uuid = generateTimebasedUniqueKey();
         PreparedQueryObject query = new PreparedQueryObject();
         StringBuilder appendBuilder = new StringBuilder();
@@ -124,11 +124,23 @@ public class TestUtils {
             .append(row.mriId)
             .append(";");
         query.appendQueryString(appendBuilder.toString());
-        ReturnType returnType = MusicCore.criticalPut(KEYSPACE, MRI_TABLE_NAME, row.mriId.toString(),
-            query, row.lockId, null);
-        //returnType.getExecutionInfo()
-        if (returnType.getResult().compareTo(ResultType.SUCCESS) != 0) {
-            System.exit(1);
+        if (useCritical){
+            ReturnType returnType = MusicCore.criticalPut(KEYSPACE, MRI_TABLE_NAME, row.mriId.toString(),
+                query, row.lockId, null);
+            if (returnType.getResult().compareTo(ResultType.SUCCESS) != 0) {
+                System.exit(1);
+            }
+        }
+        else{
+            try {
+                ResultType critical = MusicCore.nonKeyRelatedPut(query, "critical");
+                if (critical.compareTo(ResultType.SUCCESS) != 0) {
+                    System.exit(1);
+                }
+            } catch (MusicServiceException e) {
+                e.printStackTrace();
+                System.exit(1);
+            }
         }
     }
 
