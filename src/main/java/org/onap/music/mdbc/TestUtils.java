@@ -20,6 +20,14 @@
 
 package org.onap.music.mdbc;
 
+import com.datastax.driver.core.Cluster;
+import com.datastax.driver.core.ConsistencyLevel;
+import com.datastax.driver.core.ExecutionInfo;
+import com.datastax.driver.core.QueryTrace;
+import com.datastax.driver.core.ResultSet;
+import com.datastax.driver.core.Session;
+import com.datastax.driver.core.SimpleStatement;
+import com.datastax.driver.core.SocketOptions;
 import com.datastax.driver.core.utils.UUIDs;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -28,24 +36,56 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.onap.music.datastore.Condition;
+import org.onap.music.datastore.MusicDataStoreHandle;
 import org.onap.music.datastore.PreparedQueryObject;
 import org.onap.music.exceptions.MusicLockingException;
 import org.onap.music.exceptions.MusicQueryException;
 import org.onap.music.exceptions.MusicServiceException;
 import org.onap.music.main.MusicCore;
+import org.onap.music.main.MusicUtil;
 import org.onap.music.main.ResultType;
 import org.onap.music.main.ReturnType;
 
 public class TestUtils {
-    final String KEYSPACE = "metrictest";
+    final Boolean USE_CASSANDRA;
+    final Boolean USE_TRACING;
+    final String KEYSPACE1 = "metrictest";
+    final String KEYSPACE2 = "metrictest2";
     final String INTERNAL_KEYSPACE = "music_internal";
     final String MRI_TABLE_NAME = "musicrangeinformation";
     final String MTD_TABLE_NAME = "musictransactiondigest";
     final int REPLICATION_FACTOR;
+    List<Cluster> clusters;
+    List<Session> sessions;
 
-    TestUtils(int replicationFactor){
+    TestUtils(int replicationFactor, Boolean useCassandra, int parallelSessions, Boolean useTracing) throws MusicServiceException {
+        USE_CASSANDRA=useCassandra;
+        USE_TRACING=useTracing;
         REPLICATION_FACTOR=replicationFactor;
-        createKeyspace(KEYSPACE);
+        if(USE_CASSANDRA) {
+            clusters = new ArrayList<>();
+            sessions = new ArrayList<>();
+            //Use this just to populate the required field for cassandra
+            MusicDataStoreHandle.getDSHandle();
+            for(int sessionId=0;sessionId<parallelSessions;sessionId++) {
+                SocketOptions options = new SocketOptions();
+                options.setConnectTimeoutMillis(3000000);
+                options.setReadTimeoutMillis(3000000);
+                options.setTcpNoDelay(true);
+                Cluster cluster = Cluster.builder()
+                    .withPort(9042)
+                    .withCredentials(MusicUtil.getCassName(), MusicUtil.getCassPwd())
+                    .addContactPoint(MusicUtil.getMyCassaHost())
+                    .withSocketOptions(options)
+                    .build();
+
+                Session session = cluster.connect();
+                clusters.add(cluster);
+                sessions.add(session);
+            }
+        }
+        createKeyspace(KEYSPACE1);
+        createKeyspace(KEYSPACE2);
         createKeyspace(INTERNAL_KEYSPACE);
     }
 
@@ -58,7 +98,7 @@ public class TestUtils {
         }
     }
 
-    public void createKeyspace(String keyspace) throws RuntimeException {
+    private PreparedQueryObject createKeyspaceQuery(String keyspace){
         Map<String,Object> replicationInfo = new HashMap<>();
         replicationInfo.put("'class'", "'NetworkTopologyStrategy'");
         if(REPLICATION_FACTOR==3){
@@ -75,45 +115,65 @@ public class TestUtils {
         queryObject.appendQueryString(
             "CREATE KEYSPACE IF NOT EXISTS " + keyspace +
                 " WITH REPLICATION = " + replicationInfo.toString().replaceAll("=", ":"));
+        return queryObject;
+    }
 
-        try {
-            MusicCore.nonKeyRelatedPut(queryObject, "eventual");
-        } catch (MusicServiceException e) {
-            if (!e.getMessage().equals("Keyspace "+keyspace+" already exists")) {
-                throw new RuntimeException("Error creating namespace: "+keyspace+". Internal error:"+e.getErrorMessage(),
-                    e);
+    public void createKeyspace(String keyspace) throws RuntimeException {
+        PreparedQueryObject queryObject = createKeyspaceQuery(keyspace);
+        if(USE_CASSANDRA){
+            executeCassandraWriteQuery(queryObject, 0);
+        }
+        else {
+            try {
+                MusicCore.nonKeyRelatedPut(queryObject, "eventual");
+            } catch (MusicServiceException e) {
+                if (!e.getMessage().equals("Keyspace " + keyspace + " already exists")) {
+                    throw new RuntimeException(
+                        "Error creating namespace: " + keyspace + ". Internal error:" + e.getErrorMessage(),
+                        e);
+                }
             }
         }
     }
 
-    public void hardcodedAddtransaction(int size){
+    private PreparedQueryObject createAddTransactionQuery(int size){
         final UUID uuid = generateTimebasedUniqueKey();
         ByteBuffer serializedTransactionDigest = ByteBuffer.allocate(size);
         for(int i=0;i<size;i++){
             serializedTransactionDigest.put((byte)i);
         }
         PreparedQueryObject query = new PreparedQueryObject();
-        String cql = String.format("INSERT INTO %s.%s (txid,transactiondigest,compressed ) VALUES (?,?,?);",KEYSPACE,
+        String cql = String.format("INSERT INTO %s.%s (txid,transactiondigest,compressed ) VALUES (?,?,?);",KEYSPACE1,
             MTD_TABLE_NAME);
         query.appendQueryString(cql);
         query.addValue(uuid);
         query.addValue(serializedTransactionDigest);
         query.addValue(false);
+        return query;
+    }
+
+    public void hardcodedAddtransaction(int size, int index){
+        PreparedQueryObject query = createAddTransactionQuery(size);
         //\TODO check if I am not shooting on my own foot
-        try {
-            MusicCore.nonKeyRelatedPut(query,"critical");
-        } catch (MusicServiceException e) {
-            e.printStackTrace();
-            System.exit(1);
+        if(USE_CASSANDRA) {
+            executeCassandraWriteQuery(query,index);
+        }
+        else {
+            try {
+                MusicCore.nonKeyRelatedPut(query, "critical");
+            } catch (MusicServiceException e) {
+                e.printStackTrace();
+                System.exit(1);
+            }
         }
     }
 
-    public void hardcodedAppendToRedo(MriRow row, Boolean useCritical) {
+    private PreparedQueryObject createAppendToRedoQuery(MriRow row){
         final UUID uuid = generateTimebasedUniqueKey();
         PreparedQueryObject query = new PreparedQueryObject();
         StringBuilder appendBuilder = new StringBuilder();
         appendBuilder.append("UPDATE ")
-            .append(KEYSPACE)
+            .append(KEYSPACE2)
             .append(".")
             .append(MRI_TABLE_NAME)
             .append(" SET txredolog = txredolog +[('")
@@ -124,44 +184,63 @@ public class TestUtils {
             .append(row.mriId)
             .append(";");
         query.appendQueryString(appendBuilder.toString());
-        if (useCritical){
-            ReturnType returnType = MusicCore.criticalPut(KEYSPACE, MRI_TABLE_NAME, row.mriId.toString(),
-                query, row.lockId, null);
-            if (returnType.getResult().compareTo(ResultType.SUCCESS) != 0) {
-                System.exit(1);
-            }
+        return query;
+    }
+
+    public void hardcodedAppendToRedo(MriRow row, Boolean useCritical, int index) {
+        PreparedQueryObject query = createAppendToRedoQuery(row);
+        if (USE_CASSANDRA){
+            executeCassandraWriteQuery(query,index);
         }
-        else{
-            try {
-                ResultType critical = MusicCore.nonKeyRelatedPut(query, "critical");
-                if (critical.compareTo(ResultType.SUCCESS) != 0) {
+        else {
+            if (useCritical) {
+                ReturnType returnType = MusicCore.criticalPut(KEYSPACE2, MRI_TABLE_NAME, row.mriId.toString(),
+                    query, row.lockId, null);
+                if (returnType.getResult().compareTo(ResultType.SUCCESS) != 0) {
                     System.exit(1);
                 }
-            } catch (MusicServiceException e) {
-                e.printStackTrace();
-                System.exit(1);
+            } else {
+                try {
+                    ResultType critical = MusicCore.nonKeyRelatedPut(query, "critical");
+                    if (critical.compareTo(ResultType.SUCCESS) != 0) {
+                        System.exit(1);
+                    }
+                } catch (MusicServiceException e) {
+                    e.printStackTrace();
+                    System.exit(1);
+                }
             }
         }
     }
 
-    public void createMusicTxDigest()
-        throws RuntimeException {
+    private String createMusicTxDigestTableQuery(){
         String priKey = "txid";
         StringBuilder fields = new StringBuilder();
         fields.append("txid uuid, ");
         fields.append("compressed boolean, ");
         fields.append("transactiondigest blob ");//notice lack of ','
-        String cql = String.format("CREATE TABLE IF NOT EXISTS %s.%s (%s, PRIMARY KEY (%s));", KEYSPACE,MTD_TABLE_NAME,
+        String cql = String.format("CREATE TABLE IF NOT EXISTS %s.%s (%s, PRIMARY KEY (%s));", KEYSPACE1,MTD_TABLE_NAME,
             fields, priKey);
-        try {
-            executeMusicWriteQuery(KEYSPACE,MTD_TABLE_NAME,cql);
-        } catch (RuntimeException e) {
-            System.err.println("Initialization error: Failure to create redo records table");
-            throw(e);
+        return cql;
+    }
+
+    public void createMusicTxDigestTable()
+        throws RuntimeException {
+        String cql = createMusicTxDigestTableQuery();
+        if (USE_CASSANDRA){
+            executeCassandraTableQuery(cql,0);
+        }
+        else {
+            try {
+                executeMusicTableQuery(KEYSPACE2, MTD_TABLE_NAME, cql);
+            } catch (RuntimeException e) {
+                System.err.println("Initialization error: Failure to create redo records table");
+                throw (e);
+            }
         }
     }
 
-    public void createMusicRangeInformationTable() throws RuntimeException {
+    public String createMusicRangeInformationTableQuery() throws RuntimeException {
         String priKey = "rangeid";
         StringBuilder fields = new StringBuilder();
         fields.append("rangeid uuid, ");
@@ -172,12 +251,23 @@ public class TestUtils {
         //TODO: Frozen is only needed for old versions of cassandra, please update correspondingly
         fields.append("txredolog list<frozen<tuple<text,uuid>>> ");
         String cql = String.format("CREATE TABLE IF NOT EXISTS %s.%s (%s, PRIMARY KEY (%s));",
-            KEYSPACE, MRI_TABLE_NAME, fields, priKey);
-        try {
-            executeMusicWriteQuery(KEYSPACE,MRI_TABLE_NAME,cql);
-        } catch (RuntimeException e) {
-            System.err.println("Initialization error: Failure to create transaction information table");
-            throw(e);
+            KEYSPACE2, MRI_TABLE_NAME, fields, priKey);
+        return cql;
+    }
+
+    public void createMusicRangeInformationTable() throws RuntimeException {
+        String cql = createMusicRangeInformationTableQuery();
+        if (USE_CASSANDRA) {
+            executeCassandraTableQuery(cql, 0);
+
+        }
+        else {
+            try {
+                executeMusicTableQuery(KEYSPACE2, MRI_TABLE_NAME, cql);
+            } catch (RuntimeException e) {
+                System.err.println("Initialization error: Failure to create transaction information table");
+                throw (e);
+            }
         }
     }
 
@@ -194,28 +284,30 @@ public class TestUtils {
 
     public String createMusicRangeInformation(UUID mriIndex, List<String> tables)
         throws RuntimeException {
-        String fullyQualifiedMriKey = KEYSPACE+"."+ MRI_TABLE_NAME+"."+mriIndex.toString();
-        String lockId;
-        int counter=0;
-        do {
-            lockId = createAndAssignLock(fullyQualifiedMriKey);
-            //TODO: fix this retry logic
-        }while((lockId ==null||lockId.isEmpty())&&(counter++<3));
-        if(lockId == null || lockId.isEmpty()){
-            throw new RuntimeException("Error initializing music range information, error creating a lock for a new row" +
-                "for key "+fullyQualifiedMriKey) ;
+        String lockId=null;
+        if(!USE_CASSANDRA) {
+            String fullyQualifiedMriKey = KEYSPACE2 + "." + MRI_TABLE_NAME + "." + mriIndex.toString();
+            int counter = 0;
+            do {
+                lockId = createAndAssignLock(fullyQualifiedMriKey);
+                //TODO: fix this retry logic
+            } while ((lockId == null || lockId.isEmpty()) && (counter++ < 3));
+            if (lockId == null || lockId.isEmpty()) {
+                throw new RuntimeException(
+                    "Error initializing music range information, error creating a lock for a new row" +
+                        "for key " + fullyQualifiedMriKey);
+            }
         }
-        createEmptyMriRow(KEYSPACE,MRI_TABLE_NAME,mriIndex,"somethingHardcoded", lockId, tables,true);
+        createEmptyMriRow(KEYSPACE2,MRI_TABLE_NAME,mriIndex,"somethingHardcoded", lockId, tables,true);
         return lockId;
     }
 
-    public UUID createEmptyMriRow(String musicNamespace, String mriTableName, UUID id, String processId,
-        String lockId, List<String> tables, boolean isLatest)
-        throws RuntimeException {
+    public PreparedQueryObject createEmptyMriRowQuery(UUID id, List<String> tables, String lockId, Boolean isLatest,
+        String processId){
         StringBuilder insert = new StringBuilder("INSERT INTO ")
-            .append(musicNamespace)
+            .append(KEYSPACE2)
             .append('.')
-            .append(mriTableName)
+            .append(MRI_TABLE_NAME)
             .append(" (rangeid,keys,ownerid,islatest,metricprocessid,txredolog) VALUES ")
             .append("(")
             .append(id)
@@ -237,10 +329,22 @@ public class TestUtils {
             .append("',[]);");
         PreparedQueryObject query = new PreparedQueryObject();
         query.appendQueryString(insert.toString());
-        try {
-            executeMusicLockedPut(musicNamespace,mriTableName,id.toString(),query,lockId,null);
-        } catch (RuntimeException e) {
-            throw new RuntimeException("Initialization error:Failure to add new row to transaction information", e);
+        return query;
+    }
+
+    public UUID createEmptyMriRow(String musicNamespace, String mriTableName, UUID id, String processId,
+        String lockId, List<String> tables, boolean isLatest)
+        throws RuntimeException {
+        PreparedQueryObject query = createEmptyMriRowQuery(id,tables,lockId,isLatest,processId);
+        if(!USE_CASSANDRA) {
+            try {
+                executeMusicLockedPut(musicNamespace, mriTableName, id.toString(), query, lockId, null);
+            } catch (RuntimeException e) {
+                throw new RuntimeException("Initialization error:Failure to add new row to transaction information", e);
+            }
+        }
+        else{
+           executeCassandraWriteQuery(query,0);
         }
         return id;
     }
@@ -304,7 +408,7 @@ public class TestUtils {
         return lockReturn;
     }
 
-    private void executeMusicWriteQuery(String keyspace, String table, String cql)
+    private void executeMusicTableQuery(String keyspace, String table, String cql)
         throws RuntimeException {
         PreparedQueryObject pQueryObject = new PreparedQueryObject();
         pQueryObject.appendQueryString(cql);
@@ -318,6 +422,68 @@ public class TestUtils {
         String result = rt.getResult();
         if (result==null || result.toLowerCase().equals("failure")) {
             throw new RuntimeException("Music eventual put failed");
+        }
+    }
+
+    private void executeCassandraWriteQuery(PreparedQueryObject queryObject, int sessionIndex) {
+        SimpleStatement statement;
+        statement = new SimpleStatement(queryObject.getQuery(), queryObject.getValues().toArray());
+        statement.setConsistencyLevel(ConsistencyLevel.QUORUM);
+        if(USE_TRACING){
+            statement.enableTracing();
+        }
+        final ResultSet rs = sessions.get(sessionIndex).execute(statement);
+        if (!rs.wasApplied()) {
+            System.err.println("Error executing query " + queryObject.getQuery());
+            System.exit(1);
+        }
+        else if(USE_TRACING){
+            printInfo(rs);
+        }
+    }
+
+    private void executeCassandraTableQuery(String cql, int sessionIndex){
+        SimpleStatement statement;
+        statement = new SimpleStatement(cql);
+        statement.setConsistencyLevel(ConsistencyLevel.QUORUM);
+        if(USE_TRACING){
+            statement.enableTracing();
+        }
+        final ResultSet rs = sessions.get(sessionIndex).execute(statement);
+        if (!rs.wasApplied() || ! rs.getExecutionInfo().isSchemaInAgreement()) {
+            System.err.println("Error executing query " + cql);
+            System.exit(1);
+        }
+        else if(USE_TRACING){
+            printInfo(rs);
+        }
+    }
+
+    synchronized public void printInfo(ResultSet results){
+        try {
+            Thread.sleep(5000);
+            System.out.println("------------------------------------------------------------");
+            ExecutionInfo executionInfo = results.getExecutionInfo();
+            System.out.printf(
+                "'%s' from %s-%s\n",
+                executionInfo.getQueriedHost().getAddress(),
+                executionInfo.getQueriedHost().getDatacenter(),
+                executionInfo.getQueriedHost().getRack());
+            final QueryTrace trace = executionInfo.getQueryTrace();
+            System.out.printf(
+                "'%s' to %s took %dμs - Timestamp[%d] %n",
+                trace.getRequestType(), trace.getCoordinator(), trace.getDurationMicros(), trace.getStartedAt());
+            for (QueryTrace.Event event : trace.getEvents()) {
+                System.out.printf(
+                    "  %d - %s - %s - Timestamp [%d]%n",
+                    event.getSourceElapsedMicros(), event.getSource(), event.getDescription(),event.getTimestamp());
+            }
+            System.out.println("------------------------------------------------------------");
+        }
+        catch(Exception e){
+            e.printStackTrace();
+            System.out.println("ERROR-------------------------------------------------------");
+            System.err.println("Error print tracing information");
         }
     }
 }

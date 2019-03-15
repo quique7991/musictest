@@ -22,52 +22,64 @@ package org.onap.music.mdbc;
 
 import java.util.*;
 
+import org.onap.music.exceptions.MusicServiceException;
 import org.onap.music.mdbc.TestUtils.MriRow;
 
 public class ParallelTest {
-
-    final public Map<String,List<Long>> results;
     final int REPLICATION_FACTOR=3;
-    final private TestUtils utils;
-    final private MriRow row;
     final private Boolean USE_CRITICAL=true;
     final private Boolean PRINT=false;
-    final private Boolean RUN_TX_DIGEST=false;
+    final private Boolean RUN_TX_DIGEST=true;
     final private Boolean RUN_REDO=true;
+    final private Boolean USE_CASSANDRA=false;
+    final private int PARALLEL_SESSIONS=2;
+    final private Boolean USE_TRACING=false;
+
+    final private MriRow row;
+    final private TestUtils utils;
+    final public Map<String,List<Long>> results;
     final private String TX_DIGEST="DIGEST";
     final private String REDO_LOG="REDO";
 
-    public ParallelTest(String rangeTableName) {
+    public ParallelTest(String rangeTableName) throws MusicServiceException {
         results = new HashMap<>();
         results.put(TX_DIGEST,new ArrayList<>());
         results.put(REDO_LOG,new ArrayList<>());
-        utils=new TestUtils(REPLICATION_FACTOR);
+        utils=new TestUtils(REPLICATION_FACTOR,USE_CASSANDRA,PARALLEL_SESSIONS,USE_TRACING);
         utils.createMusicRangeInformationTable();
-        utils.createMusicTxDigest();
+        utils.createMusicTxDigestTable();
         row = utils.createBasicRow(rangeTableName);
     }
 
-    public void addTxDigest(int size){
+    public void addTxDigest(int size,int index){
         long time = System.nanoTime();
         if(PRINT)
             System.out.println("Starting tx digest");
-        utils.hardcodedAddtransaction(size);
+        utils.hardcodedAddtransaction(size,index);
         if(PRINT)
             System.out.println("Ending tx digest");
         long nanosecondTime = System.nanoTime() - time;
         long millisecond = nanosecondTime / 1000000;
+        if(USE_TRACING){
+            System.out.print(millisecond);
+            System.out.println(" ms");
+        }
         results.get(TX_DIGEST).add(millisecond);
     }
 
-    public void appendToRedo(){
+    public void appendToRedo(int index){
         long time = System.nanoTime();
         if(PRINT)
             System.out.println("Starting redo append");
-        utils.hardcodedAppendToRedo(row,USE_CRITICAL);
+        utils.hardcodedAppendToRedo(row,USE_CRITICAL,index);
         if(PRINT)
             System.out.println("Ending redo append");
         long nanosecondTime = System.nanoTime() - time;
         long millisecond = nanosecondTime / 1000000;
+        if(USE_TRACING){
+            System.out.print(millisecond);
+            System.out.println(" ms");
+        }
         results.get(REDO_LOG).add(millisecond);
     }
 
@@ -75,14 +87,15 @@ public class ParallelTest {
         Thread t1=null;
         Thread t2=null;
 
-        final Runnable insertDigestCallable = () -> addTxDigest(110);
+        final Runnable insertDigestCallable = () -> addTxDigest(110,0);
 
         if(RUN_TX_DIGEST) {
             t1 = new Thread(insertDigestCallable);
             t1.start();
         }
 
-        final Runnable appendCallable = () -> appendToRedo();
+        final Runnable appendCallable = () -> appendToRedo(1);
+        ///final Runnable appendCallable = () -> addTxDigest(110,1);
 
         if(RUN_REDO) {
             t2 = new Thread(appendCallable);
@@ -103,7 +116,13 @@ public class ParallelTest {
     public static void main(String[] args){
         List<Long> values=new ArrayList<>();
         int iterations = 100;
-        ParallelTest test = new ParallelTest("rangeTable");
+        ParallelTest test = null;
+        try {
+            test = new ParallelTest("rangeTable");
+        } catch (MusicServiceException e) {
+            e.printStackTrace();
+            System.exit(1);
+        }
         for(int iter=0;iter<iterations;iter++) {
             long time = System.nanoTime();
             test.testMethod();
