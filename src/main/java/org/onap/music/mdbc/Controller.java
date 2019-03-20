@@ -33,32 +33,39 @@ import org.onap.music.mdbc.proto.TestServiceGrpc;
 
 public class Controller {
 
-        public static void main(String[] args){
-                Map<String,List<Long>> results = new HashMap<>();
-                List<Long> values=new ArrayList<>();
-                List<ManagedChannel> channels = new ArrayList<>();
-                List<TestServiceGrpc.TestServiceBlockingStub> stubs = new ArrayList<>();
-                int iterations = Integer.parseInt(args[0]);
-                for(int i=1; i < args.length;i++){
-                        JSONObject obj = new JSONObject(args[i]);
-                        ManagedChannelBuilder<?> o = ManagedChannelBuilder.forAddress(obj.getString("url"), obj.getInt("port")).usePlaintext();
-                        ManagedChannel chann = o.build();
-                        channels.add(chann);
-                        stubs.add(TestServiceGrpc.newBlockingStub(chann));
-                }
-
-                for(int iter = 0; iter<iterations;iter++){
-                    for(TestServiceGrpc.TestServiceBlockingStub stub : stubs){
-                            Ack ack = stub.executeOnce(Empty.newBuilder().build());
-                            values.addAll(ack.getLatencyList());
-                    }
-                }
-                for(TestServiceGrpc.TestServiceBlockingStub stub : stubs){
-                        Empty empty = stub.end(Empty.newBuilder().build());
-                }
-
-                TestUtils.printResults(values,results);
-                System.out.println("EXITING");
-                System.exit(0);
+    public static void main(String[] args){
+        Map<String,List<Long>> results = new HashMap<>();
+        List<Long> values=new ArrayList<>();
+        List<ManagedChannel> channels = new ArrayList<>();
+        List<TestServiceGrpc.TestServiceBlockingStub> stubs = new ArrayList<>();
+        int iterations = Integer.parseInt(args[0]);
+        for(int i=1; i < args.length;i++){
+            JSONObject obj = new JSONObject(args[i]);
+            final String url = obj.getString("url");
+            final int port = obj.getInt("port");
+            ManagedChannelBuilder<?> o = ManagedChannelBuilder.forAddress(url,port).usePlaintext();
+            ManagedChannel chann = o.build();
+            channels.add(chann);
+            stubs.add(TestServiceGrpc.newBlockingStub(chann));
         }
+
+        for(int iter = 0; iter<iterations;iter++){
+            for(TestServiceGrpc.TestServiceBlockingStub stub : stubs){
+                Ack ack = stub.executeOnce(Empty.newBuilder().build());
+                values.addAll(ack.getLatencyList());
+            }
+        }
+        for(TestServiceGrpc.TestServiceBlockingStub stub : stubs){
+            try {
+                Empty empty = stub.end(Empty.newBuilder().build());
+            }
+            catch(Exception e){
+                System.out.println(e.getMessage());
+            }
+        }
+
+        TestUtils.printResults(values,results);
+        System.out.println("EXITING");
+        System.exit(0);
+    }
 }

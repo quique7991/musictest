@@ -127,7 +127,7 @@ public class ParallelTest {
     }
 
 
-    public static void main(String[] args) throws IOException {
+    public static void main(String[] args) throws IOException, InterruptedException {
         List<Long> values=new ArrayList<>();
         int iterations = Integer.parseInt(args[0]);
         if(args.length>1) {
@@ -152,11 +152,11 @@ public class ParallelTest {
         }
         boolean useServer=false;
         if(args.length>7) {
-            useServer  = Boolean.parseBoolean(args[6]);
+            useServer  = Boolean.parseBoolean(args[7]);
         }
         int port=-1;
         if(args.length>8){
-            port = Integer.parseInt(args[7]);
+            port = Integer.parseInt(args[8]);
         }
         else if(useServer){
             System.err.println("Use server requires the port to be used");
@@ -184,6 +184,7 @@ public class ParallelTest {
                     System.err.println("*** server shut down");
                 }
             });
+            test.server.awaitTermination();
         }
         else {
             for (int iter = 0; iter < iterations; iter++) {

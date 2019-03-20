@@ -88,7 +88,7 @@
       <!-- 19.0 is needed by cassandra-driver-core 3.3.0 -->
       <groupId>com.google.guava</groupId>
       <artifactId>guava</artifactId>
-      <version>19.0</version>
+      <version>20.0</version>
     </dependency>
     <dependency>
       <groupId>ch.qos.logback</groupId>
@@ -123,12 +123,6 @@
       <version>1.1.2.6</version>
     </dependency>
     <dependency>
-      <groupId>org.cassandraunit</groupId>
-      <artifactId>cassandra-unit</artifactId>
-      <version>3.5.0.1</version>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
       <groupId>com.att.eelf</groupId>
       <artifactId>eelf-core</artifactId>
       <version>1.0.0</version>
@@ -149,6 +143,12 @@
       <groupId>io.netty</groupId>
       <artifactId>netty-handler</artifactId>
       <version>4.1.30.Final</version>
+    </dependency>
+    <dependency>
+      <groupId>io.netty</groupId>
+      <artifactId>netty-tcnative-boringssl-static</artifactId>
+      <scope>runtime</scope>
+      <version>2.0.22.Final</version>
     </dependency>
     <dependency>
       <groupId>com.beust</groupId>
