@@ -27,13 +27,14 @@ import org.onap.music.mdbc.TestUtils.MriRow;
 
 public class ParallelTest {
     final int REPLICATION_FACTOR=3;
-    final private Boolean USE_CRITICAL=true;
-    final private Boolean PRINT=false;
-    final private Boolean RUN_TX_DIGEST=true;
-    final private Boolean RUN_REDO=true;
-    final private Boolean USE_CASSANDRA=false;
     final private int PARALLEL_SESSIONS=2;
-    final private Boolean USE_TRACING=false;
+
+    static public Boolean USE_CRITICAL=true;
+    static public Boolean PRINT=false;
+    static public Boolean RUN_TX_DIGEST=true;
+    static public Boolean RUN_REDO=true;
+    static public Boolean USE_CASSANDRA=true;
+    static public Boolean USE_TRACING=false;
 
     final private MriRow row;
     final private TestUtils utils;
@@ -115,7 +116,27 @@ public class ParallelTest {
 
     public static void main(String[] args){
         List<Long> values=new ArrayList<>();
-        int iterations = 100;
+        int iterations = Integer.parseInt(args[0]);
+        if(args.length>1) {
+            ParallelTest.RUN_TX_DIGEST = Boolean.parseBoolean(args[1]);
+        }
+        if(args.length>2) {
+            ParallelTest.RUN_REDO = Boolean.parseBoolean(args[2]);
+        }
+
+        if(args.length>3) {
+            ParallelTest.USE_CASSANDRA = Boolean.parseBoolean(args[3]);
+        }
+
+        if(args.length>4) {
+            ParallelTest.USE_CRITICAL = Boolean.parseBoolean(args[4]);
+        }
+        if(args.length>5) {
+            ParallelTest.PRINT = Boolean.parseBoolean(args[5]);
+        }
+        if(args.length>6) {
+            ParallelTest.USE_TRACING = Boolean.parseBoolean(args[6]);
+        }
         ParallelTest test = null;
         try {
             test = new ParallelTest("rangeTable");
@@ -123,6 +144,9 @@ public class ParallelTest {
             e.printStackTrace();
             System.exit(1);
         }
+
+
+
         for(int iter=0;iter<iterations;iter++) {
             long time = System.nanoTime();
             test.testMethod();
@@ -142,6 +166,8 @@ public class ParallelTest {
             System.out.println("Average:"+longSummaryStatisticsTemp.getAverage() + "ms");
             System.out.println("Max:"+longSummaryStatisticsTemp.getMax() + "ms");
         }
+        System.out.println("EXITING");
+        System.exit(0);
     }
 
 }
