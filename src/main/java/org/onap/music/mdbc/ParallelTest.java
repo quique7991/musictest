@@ -20,14 +20,18 @@
 package org.onap.music.mdbc;
 
 
+import java.io.IOException;
 import java.util.*;
 
+import io.grpc.Server;
+import io.grpc.ServerBuilder;
 import org.onap.music.exceptions.MusicServiceException;
 import org.onap.music.mdbc.TestUtils.MriRow;
 
 public class ParallelTest {
     final int REPLICATION_FACTOR=3;
     final private int PARALLEL_SESSIONS=2;
+    Server server;
 
     static public Boolean USE_CRITICAL=true;
     static public Boolean PRINT=false;
@@ -52,6 +56,17 @@ public class ParallelTest {
         row = utils.createBasicRow(rangeTableName);
     }
 
+    private void AddResultAndProcess(long time, String operType) {
+        long nanosecondTime = System.nanoTime() - time;
+        long millisecond = nanosecondTime / 1000000;
+        if(USE_TRACING){
+            System.out.print(millisecond);
+            System.out.println(" ms");
+        }
+        results.get(operType).add(millisecond);
+    }
+
+
     public void addTxDigest(int size,int index){
         long time = System.nanoTime();
         if(PRINT)
@@ -59,14 +74,9 @@ public class ParallelTest {
         utils.hardcodedAddtransaction(size,index);
         if(PRINT)
             System.out.println("Ending tx digest");
-        long nanosecondTime = System.nanoTime() - time;
-        long millisecond = nanosecondTime / 1000000;
-        if(USE_TRACING){
-            System.out.print(millisecond);
-            System.out.println(" ms");
-        }
-        results.get(TX_DIGEST).add(millisecond);
+        AddResultAndProcess(time, TX_DIGEST);
     }
+
 
     public void appendToRedo(int index){
         long time = System.nanoTime();
@@ -75,13 +85,7 @@ public class ParallelTest {
         utils.hardcodedAppendToRedo(row,USE_CRITICAL,index);
         if(PRINT)
             System.out.println("Ending redo append");
-        long nanosecondTime = System.nanoTime() - time;
-        long millisecond = nanosecondTime / 1000000;
-        if(USE_TRACING){
-            System.out.print(millisecond);
-            System.out.println(" ms");
-        }
-        results.get(REDO_LOG).add(millisecond);
+        AddResultAndProcess(time, REDO_LOG);
     }
 
     public void testMethod() {
@@ -114,7 +118,16 @@ public class ParallelTest {
         }
     }
 
-    public static void main(String[] args){
+    public void stopServer(){
+        if (server != null) {
+            server.shutdown();
+        }
+        List<Long> values=new ArrayList<>();
+        TestUtils.printResults(values,results);
+    }
+
+
+    public static void main(String[] args) throws IOException {
         List<Long> values=new ArrayList<>();
         int iterations = Integer.parseInt(args[0]);
         if(args.length>1) {
@@ -137,6 +150,19 @@ public class ParallelTest {
         if(args.length>6) {
             ParallelTest.USE_TRACING = Boolean.parseBoolean(args[6]);
         }
+        boolean useServer=false;
+        if(args.length>7) {
+            useServer  = Boolean.parseBoolean(args[6]);
+        }
+        int port=-1;
+        if(args.length>8){
+            port = Integer.parseInt(args[7]);
+        }
+        else if(useServer){
+            System.err.println("Use server requires the port to be used");
+            System.exit(1);
+        }
+
         ParallelTest test = null;
         try {
             test = new ParallelTest("rangeTable");
@@ -144,28 +170,31 @@ public class ParallelTest {
             e.printStackTrace();
             System.exit(1);
         }
-
-
-
-        for(int iter=0;iter<iterations;iter++) {
-            long time = System.nanoTime();
-            test.testMethod();
-            long nanosecondTime = System.nanoTime() - time;
-            long millisecond = nanosecondTime / 1000000;
-            values.add(millisecond);
+        if(useServer) {
+            ServerBuilder<?> serverBuilder = ServerBuilder.forPort(port);
+            test.server=serverBuilder.addService(new RpcServer(test)).build();
+            test.server.start();
+            ParallelTest finalTest = test;
+            Runtime.getRuntime().addShutdownHook(new Thread() {
+                @Override
+                public void run() {
+                    // Use stderr here since the logger may has been reset by its JVM shutdown hook.
+                    System.err.println("*** shutting down gRPC server since JVM is shutting down");
+                    finalTest.stopServer();
+                    System.err.println("*** server shut down");
+                }
+            });
         }
-        final LongSummaryStatistics longSummaryStatistics = values.stream().mapToLong((x) -> x).summaryStatistics();
-        System.out.println("Total");
-        System.out.println("Min:"+longSummaryStatistics.getMin() + "ms");
-        System.out.println("Average:"+longSummaryStatistics.getAverage() + "ms");
-        System.out.println("Max:"+longSummaryStatistics.getMax() + "ms");
-        for(Map.Entry<String,List<Long>> e:test.results.entrySet()){
-            System.out.println(e.getKey());
-            LongSummaryStatistics longSummaryStatisticsTemp = e.getValue().stream().mapToLong((x) -> x).summaryStatistics();
-            System.out.println("Min:"+longSummaryStatisticsTemp.getMin() + "ms");
-            System.out.println("Average:"+longSummaryStatisticsTemp.getAverage() + "ms");
-            System.out.println("Max:"+longSummaryStatisticsTemp.getMax() + "ms");
+        else {
+            for (int iter = 0; iter < iterations; iter++) {
+                long time = System.nanoTime();
+                test.testMethod();
+                long nanosecondTime = System.nanoTime() - time;
+                long millisecond = nanosecondTime / 1000000;
+                values.add(millisecond);
+            }
         }
+        TestUtils.printResults(values,test.results);
         System.out.println("EXITING");
         System.exit(0);
     }

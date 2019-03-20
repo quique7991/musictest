@@ -30,11 +30,8 @@ import com.datastax.driver.core.SimpleStatement;
 import com.datastax.driver.core.SocketOptions;
 import com.datastax.driver.core.utils.UUIDs;
 import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
+import java.util.*;
+
 import org.onap.music.datastore.Condition;
 import org.onap.music.datastore.MusicDataStoreHandle;
 import org.onap.music.datastore.PreparedQueryObject;
@@ -485,5 +482,22 @@ public class TestUtils {
             System.out.println("ERROR-------------------------------------------------------");
             System.err.println("Error print tracing information");
         }
+    }
+
+    public static void printResults(List<Long> values,Map<String,List<Long>> results){
+        final LongSummaryStatistics longSummaryStatistics = values.stream().mapToLong((x) -> x).summaryStatistics();
+        System.out.println("Total");
+        printStats(longSummaryStatistics);
+        for(Map.Entry<String,List<Long>> e:results.entrySet()){
+            System.out.println(e.getKey());
+            LongSummaryStatistics longSummaryStatisticsTemp = e.getValue().stream().mapToLong((x) -> x).summaryStatistics();
+            printStats(longSummaryStatisticsTemp);
+        }
+    }
+
+    private static void printStats(LongSummaryStatistics statistics) {
+        System.out.println("Min:"+ statistics.getMin() + "ms");
+        System.out.println("Average:"+ statistics.getAverage() + "ms");
+        System.out.println("Max:"+ statistics.getMax() + "ms");
     }
 }

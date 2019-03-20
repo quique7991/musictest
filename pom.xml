@@ -74,6 +74,11 @@
 
   <dependencies>
     <dependency>
+      <groupId>io.grpc</groupId>
+      <artifactId>grpc-all</artifactId>
+      <version>1.19.0</version>
+    </dependency>
+    <dependency>
       <groupId>com.datastax.cassandra</groupId>
       <artifactId>cassandra-driver-core</artifactId>
       <version>3.3.0</version>
@@ -192,6 +197,25 @@
                 <descriptorRef>jar-with-dependencies</descriptorRef>
               </descriptorRefs>
               <finalName>parallel-test</finalName>
+              <appendAssemblyId>false</appendAssemblyId>
+            </configuration>
+          </execution>
+          <execution>
+            <id>controller</id>
+            <phase>package</phase>
+            <goals>
+              <goal>single</goal>
+            </goals>
+            <configuration>
+              <archive>
+                <manifest>
+                  <mainClass>org.onap.music.mdbc.Controller</mainClass>
+                </manifest>
+              </archive>
+              <descriptorRefs>
+                <descriptorRef>jar-with-dependencies</descriptorRef>
+              </descriptorRefs>
+              <finalName>controller</finalName>
               <appendAssemblyId>false</appendAssemblyId>
             </configuration>
           </execution>

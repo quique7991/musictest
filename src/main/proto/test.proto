@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "org.onap.music.mdbc.proto";
+option java_outer_classname = "MusicTestProto";
+option objc_class_prefix = "MTP";
+
+package musictestproto;
+
+// Interface exported by the server.
+service TestService {
+
+  rpc ExecuteOnce(Empty) returns (Ack) {}
+
+
+  rpc ExecuteMany(Iterations) returns (Ack) {}
+
+  rpc End(Empty) returns (Empty) {}
+
+}
+
+message Empty {
+}
+message Ack {
+  repeated int64 latency = 1;
+}
+
+message Iterations {
+  int32 iters = 1;
+}
