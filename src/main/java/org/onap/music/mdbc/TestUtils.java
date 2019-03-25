@@ -20,14 +20,9 @@
 
 package org.onap.music.mdbc;
 
-import com.datastax.driver.core.Cluster;
-import com.datastax.driver.core.ConsistencyLevel;
-import com.datastax.driver.core.ExecutionInfo;
-import com.datastax.driver.core.QueryTrace;
-import com.datastax.driver.core.ResultSet;
-import com.datastax.driver.core.Session;
-import com.datastax.driver.core.SimpleStatement;
-import com.datastax.driver.core.SocketOptions;
+import com.datastax.driver.core.*;
+import com.datastax.driver.core.policies.DCAwareRoundRobinPolicy;
+import com.datastax.driver.core.querybuilder.Batch;
 import com.datastax.driver.core.utils.UUIDs;
 import java.nio.ByteBuffer;
 import java.util.*;
@@ -46,11 +41,15 @@ import org.onap.music.main.ReturnType;
 public class TestUtils {
     final Boolean USE_CASSANDRA;
     final Boolean USE_TRACING;
+    final String BASELINE_KEYSPACE1 = "baseline1";
+    final String BASELINE_KEYSPACE2 = "baseline2";
     final String KEYSPACE1 = "metrictest";
     final String KEYSPACE2 = "metrictest2";
     final String INTERNAL_KEYSPACE = "music_internal";
     final String MRI_TABLE_NAME = "musicrangeinformation";
     final String MTD_TABLE_NAME = "musictransactiondigest";
+    final String BASELINE_TABLE1= "simpletable1";
+    final String BASELINE_TABLE2= "simpletable2";
     final int REPLICATION_FACTOR;
     List<Cluster> clusters;
     List<Session> sessions;
@@ -66,15 +65,20 @@ public class TestUtils {
             MusicDataStoreHandle.getDSHandle();
             for(int sessionId=0;sessionId<parallelSessions;sessionId++) {
                 SocketOptions options = new SocketOptions();
-                options.setConnectTimeoutMillis(3000000);
-                options.setReadTimeoutMillis(3000000);
                 options.setTcpNoDelay(true);
-                Cluster cluster = Cluster.builder()
+                Cluster cluster = Cluster.builder().withPort(9042)
+                    .addContactPoint(MusicUtil.getMyCassaHost())
+                    .withLoadBalancingPolicy(
+                        DCAwareRoundRobinPolicy.builder().withLocalDc("dc1").withUsedHostsPerRemoteDc(0).build()
+                    )
+                    .withSocketOptions(options)
+                    .build();
+                /*Cluster cluster = Cluster.builder()
                     .withPort(9042)
                     .withCredentials(MusicUtil.getCassName(), MusicUtil.getCassPwd())
                     .addContactPoint(MusicUtil.getMyCassaHost())
                     .withSocketOptions(options)
-                    .build();
+                    .build();*/
 
                 Session session = cluster.connect();
                 clusters.add(cluster);
@@ -83,6 +87,8 @@ public class TestUtils {
         }
         createKeyspace(KEYSPACE1);
         createKeyspace(KEYSPACE2);
+        createKeyspace(BASELINE_KEYSPACE1);
+        createKeyspace(BASELINE_KEYSPACE2);
         createKeyspace(INTERNAL_KEYSPACE);
     }
 
@@ -133,6 +139,44 @@ public class TestUtils {
         }
     }
 
+    private PreparedQueryObject createBaselineQuery(int version){
+        if(version>2 || version < 0){
+            System.err.println("Invalid baseline query");
+            System.exit(1);
+        }
+        String keyspace = (version==0)?BASELINE_KEYSPACE1:BASELINE_KEYSPACE2;
+        String table = (version==0)?BASELINE_TABLE1:BASELINE_TABLE2;
+        final UUID uuid = generateTimebasedUniqueKey();
+        final int counter = 0;
+        PreparedQueryObject query = new PreparedQueryObject();
+        String cql = String.format("INSERT INTO %s.%s (id,counter) VALUES (?,?);",keyspace,
+            table);
+        query.appendQueryString(cql);
+        query.addValue(uuid);
+        query.addValue(counter);
+        return query;
+    }
+
+    public void hardcodedBaselineQuery(int version, int index){
+        PreparedQueryObject query = createBaselineQuery(version);
+        //\TODO check if I am not shooting on my own foot
+        executeQuorumQuery(index, query);
+    }
+
+    private void executeQuorumQuery(int index, PreparedQueryObject query) {
+        if(USE_CASSANDRA) {
+            executeCassandraWriteQuery(query,index);
+        }
+        else {
+            try {
+                MusicCore.nonKeyRelatedPut(query, "critical");
+            } catch (MusicServiceException e) {
+                e.printStackTrace();
+                System.exit(1);
+            }
+        }
+    }
+
     private PreparedQueryObject createAddTransactionQuery(int size){
         final UUID uuid = generateTimebasedUniqueKey();
         ByteBuffer serializedTransactionDigest = ByteBuffer.allocate(size);
@@ -152,17 +196,7 @@ public class TestUtils {
     public void hardcodedAddtransaction(int size, int index){
         PreparedQueryObject query = createAddTransactionQuery(size);
         //\TODO check if I am not shooting on my own foot
-        if(USE_CASSANDRA) {
-            executeCassandraWriteQuery(query,index);
-        }
-        else {
-            try {
-                MusicCore.nonKeyRelatedPut(query, "critical");
-            } catch (MusicServiceException e) {
-                e.printStackTrace();
-                System.exit(1);
-            }
-        }
+        executeQuorumQuery(index, query);
     }
 
     private PreparedQueryObject createAppendToRedoQuery(MriRow row){
@@ -173,15 +207,24 @@ public class TestUtils {
             .append(KEYSPACE2)
             .append(".")
             .append(MRI_TABLE_NAME)
-            .append(" SET txredolog = txredolog +[('")
-            .append(MTD_TABLE_NAME)
-            .append("',")
+            .append(" SET txredolog = txredolog +{")
             .append(uuid)
-            .append(")] WHERE rangeid = ")
+            .append("} WHERE rangeid = ")
             .append(row.mriId)
             .append(";");
         query.appendQueryString(appendBuilder.toString());
         return query;
+    }
+
+    public void hardcodedBatchQuery(MriRow row, int txSize, int index){
+        PreparedQueryObject redoQuery = createAppendToRedoQuery(row);
+        SimpleStatement redoStatement = new SimpleStatement(redoQuery.getQuery(), redoQuery.getValues().toArray());
+        PreparedQueryObject txDigestQuery = createAddTransactionQuery(txSize);
+        SimpleStatement txStatement = new SimpleStatement(txDigestQuery.getQuery(), txDigestQuery.getValues().toArray());
+        BatchStatement batchStatement = new BatchStatement();
+        batchStatement.add(redoStatement);
+        batchStatement.add(txStatement);
+        executeCassandraBatchWriteQuery(batchStatement,index);
     }
 
     public void hardcodedAppendToRedo(MriRow row, Boolean useCritical, int index) {
@@ -210,6 +253,45 @@ public class TestUtils {
         }
     }
 
+    private void createTable(String cql, String keyspace, String table) {
+        if (USE_CASSANDRA){
+            executeCassandraTableQuery(cql,0);
+        }
+        else {
+            try {
+                executeMusicTableQuery(keyspace, table, cql);
+            } catch (RuntimeException e) {
+                System.err.println("Initialization error: Failure to create redo records table");
+                throw (e);
+            }
+        }
+    }
+
+
+    private String createBaselineTableQuery(String keyspace,String table){
+        String priKey = "id";
+        StringBuilder fields = new StringBuilder();
+        fields.append("id uuid, ");
+        fields.append("counter int ");
+        String cql = String.format("CREATE TABLE IF NOT EXISTS %s.%s (%s, PRIMARY KEY (%s));", keyspace,table,
+            fields, priKey);
+        return cql;
+    }
+
+    public void createBaselineTable(int version)
+        throws RuntimeException {
+        if(version>2 || version < 0){
+            System.err.println("Invalid baseline query");
+            System.exit(1);
+        }
+        String keyspace = (version==0)?BASELINE_KEYSPACE1:BASELINE_KEYSPACE2;
+        String table = (version==0)?BASELINE_TABLE1:BASELINE_TABLE2;
+        String cql = createBaselineTableQuery(keyspace,table);
+        createTable(cql, keyspace, table);
+    }
+
+
+
     private String createMusicTxDigestTableQuery(){
         String priKey = "txid";
         StringBuilder fields = new StringBuilder();
@@ -224,17 +306,7 @@ public class TestUtils {
     public void createMusicTxDigestTable()
         throws RuntimeException {
         String cql = createMusicTxDigestTableQuery();
-        if (USE_CASSANDRA){
-            executeCassandraTableQuery(cql,0);
-        }
-        else {
-            try {
-                executeMusicTableQuery(KEYSPACE2, MTD_TABLE_NAME, cql);
-            } catch (RuntimeException e) {
-                System.err.println("Initialization error: Failure to create redo records table");
-                throw (e);
-            }
-        }
+        createTable(cql, KEYSPACE1, MTD_TABLE_NAME);
     }
 
     public String createMusicRangeInformationTableQuery() throws RuntimeException {
@@ -246,7 +318,7 @@ public class TestUtils {
         fields.append("islatest boolean, ");
         fields.append("metricprocessid text, ");
         //TODO: Frozen is only needed for old versions of cassandra, please update correspondingly
-        fields.append("txredolog list<frozen<tuple<text,uuid>>> ");
+        fields.append("txredolog set<uuid> ");
         String cql = String.format("CREATE TABLE IF NOT EXISTS %s.%s (%s, PRIMARY KEY (%s));",
             KEYSPACE2, MRI_TABLE_NAME, fields, priKey);
         return cql;
@@ -254,18 +326,7 @@ public class TestUtils {
 
     public void createMusicRangeInformationTable() throws RuntimeException {
         String cql = createMusicRangeInformationTableQuery();
-        if (USE_CASSANDRA) {
-            executeCassandraTableQuery(cql, 0);
-
-        }
-        else {
-            try {
-                executeMusicTableQuery(KEYSPACE2, MRI_TABLE_NAME, cql);
-            } catch (RuntimeException e) {
-                System.err.println("Initialization error: Failure to create transaction information table");
-                throw (e);
-            }
-        }
+        createTable(cql,KEYSPACE2,MRI_TABLE_NAME);
     }
 
     public UUID generateTimebasedUniqueKey() {return UUIDs.timeBased();}
@@ -323,7 +384,7 @@ public class TestUtils {
             .append(isLatest)
             .append(",'")
             .append(processId)
-            .append("',[]);");
+            .append("',{});");
         PreparedQueryObject query = new PreparedQueryObject();
         query.appendQueryString(insert.toString());
         return query;
@@ -422,6 +483,21 @@ public class TestUtils {
         }
     }
 
+    private void executeCassandraBatchWriteQuery(BatchStatement batchQuery, int sessionIndex){
+        batchQuery.setConsistencyLevel(ConsistencyLevel.QUORUM);
+        if(USE_TRACING){
+            batchQuery.enableTracing();
+        }
+        final ResultSet rs = sessions.get(sessionIndex).execute(batchQuery);
+        if (!rs.wasApplied()) {
+            System.err.println("Error executing query " + batchQuery.getStatements());
+            System.exit(1);
+        }
+        else if(USE_TRACING){
+            printInfo(rs);
+        }
+    }
+
     private void executeCassandraWriteQuery(PreparedQueryObject queryObject, int sessionIndex) {
         SimpleStatement statement;
         statement = new SimpleStatement(queryObject.getQuery(), queryObject.getValues().toArray());
@@ -467,6 +543,10 @@ public class TestUtils {
                 executionInfo.getQueriedHost().getDatacenter(),
                 executionInfo.getQueriedHost().getRack());
             final QueryTrace trace = executionInfo.getQueryTrace();
+            System.out.println("Parameters for the query");
+            for(Map.Entry<String,String> param: trace.getParameters().entrySet()){
+               System.out.printf("\t[%s]: %s\n",param.getKey(),param.getValue());
+            }
             System.out.printf(
                 "'%s' to %s took %dμs - Timestamp[%d] %n",
                 trace.getRequestType(), trace.getCoordinator(), trace.getDurationMicros(), trace.getStartedAt());
@@ -486,18 +566,22 @@ public class TestUtils {
 
     public static void printResults(List<Long> values,Map<String,List<Long>> results){
         final LongSummaryStatistics longSummaryStatistics = values.stream().mapToLong((x) -> x).summaryStatistics();
-        System.out.println("Total");
-        printStats(longSummaryStatistics);
+        System.out.println("Operation\t\t\tMin\t\t\tAvg\t\t\tMax\t\t\t");
+        printStats("Total",longSummaryStatistics);
         for(Map.Entry<String,List<Long>> e:results.entrySet()){
-            System.out.println(e.getKey());
             LongSummaryStatistics longSummaryStatisticsTemp = e.getValue().stream().mapToLong((x) -> x).summaryStatistics();
-            printStats(longSummaryStatisticsTemp);
+            printStats(e.getKey(),longSummaryStatisticsTemp);
         }
     }
 
-    private static void printStats(LongSummaryStatistics statistics) {
-        System.out.println("Min:"+ statistics.getMin() + "ms");
-        System.out.println("Average:"+ statistics.getAverage() + "ms");
-        System.out.println("Max:"+ statistics.getMax() + "ms");
+    private static void printStats(String operation, LongSummaryStatistics statistics) {
+        System.out.print(operation);
+        System.out.print("\t\t\t");
+        System.out.print(statistics.getMin() + "ms");
+        System.out.print("\t\t\t");
+        System.out.print(statistics.getAverage() + "ms");
+        System.out.print("\t\t\t");
+        System.out.print(statistics.getMax() + "ms");
+        System.out.print("\n");
     }
 }

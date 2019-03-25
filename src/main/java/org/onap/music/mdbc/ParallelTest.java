@@ -30,7 +30,8 @@ import org.onap.music.mdbc.TestUtils.MriRow;
 
 public class ParallelTest {
     final int REPLICATION_FACTOR=3;
-    final private int PARALLEL_SESSIONS=2;
+    //final private int PARALLEL_SESSIONS=2;
+    final private int PARALLEL_SESSIONS=1;
     Server server;
 
     static public Boolean USE_CRITICAL=true;
@@ -44,15 +45,27 @@ public class ParallelTest {
     final private TestUtils utils;
     final public Map<String,List<Long>> results;
     final private String TX_DIGEST="DIGEST";
+    final private String SERIAL_TX_DIGEST="S_DIGEST";
     final private String REDO_LOG="REDO";
+    final private String SERIAL_REDO_LOG="S_REDO";
+    final private String BASELINE1="BASELINE1";
+    final private String BASELINE2="BASELINE2";
+    final private String BATCH="BATCH";
 
     public ParallelTest(String rangeTableName) throws MusicServiceException {
         results = new HashMap<>();
         results.put(TX_DIGEST,new ArrayList<>());
+        results.put(SERIAL_TX_DIGEST,new ArrayList<>());
         results.put(REDO_LOG,new ArrayList<>());
+        results.put(SERIAL_REDO_LOG,new ArrayList<>());
+        results.put(BASELINE1,new ArrayList<>());
+        results.put(BASELINE2,new ArrayList<>());
+        results.put(BATCH,new ArrayList<>());
         utils=new TestUtils(REPLICATION_FACTOR,USE_CASSANDRA,PARALLEL_SESSIONS,USE_TRACING);
         utils.createMusicRangeInformationTable();
         utils.createMusicTxDigestTable();
+        utils.createBaselineTable(0);
+        utils.createBaselineTable(1);
         row = utils.createBasicRow(rangeTableName);
     }
 
@@ -66,40 +79,65 @@ public class ParallelTest {
         results.get(operType).add(millisecond);
     }
 
+    public void baselineQuery(int channel,int index, String operType){
+        long time = System.nanoTime();
+        if(PRINT)
+            System.out.println("Starting baseline");
+        utils.hardcodedBaselineQuery(index,channel);
+        if(PRINT)
+            System.out.println("Ending baseline");
+        AddResultAndProcess(time, operType);
+    }
 
-    public void addTxDigest(int size,int index){
+
+    public void addTxDigest(int size,int index, String operType){
         long time = System.nanoTime();
         if(PRINT)
             System.out.println("Starting tx digest");
         utils.hardcodedAddtransaction(size,index);
         if(PRINT)
             System.out.println("Ending tx digest");
-        AddResultAndProcess(time, TX_DIGEST);
+        AddResultAndProcess(time, operType);
     }
 
 
-    public void appendToRedo(int index){
+    public void appendToRedo(int index, String operType){
         long time = System.nanoTime();
         if(PRINT)
             System.out.println("Starting redo append");
         utils.hardcodedAppendToRedo(row,USE_CRITICAL,index);
         if(PRINT)
             System.out.println("Ending redo append");
-        AddResultAndProcess(time, REDO_LOG);
+        AddResultAndProcess(time, operType);
+    }
+
+    public void batchQuery(int size,int index, String operType){
+        long time = System.nanoTime();
+        if(PRINT)
+            System.out.println("Starting batch op");
+        utils.hardcodedBatchQuery(row,size,index);
+        if(PRINT)
+            System.out.println("Ending redo append");
+        AddResultAndProcess(time, operType);
+    }
+
+    public void serialTestMethod() {
+        addTxDigest(110,0,SERIAL_TX_DIGEST);
+        appendToRedo(0, SERIAL_REDO_LOG);
     }
 
     public void testMethod() {
         Thread t1=null;
         Thread t2=null;
 
-        final Runnable insertDigestCallable = () -> addTxDigest(110,0);
+        final Runnable insertDigestCallable = () -> addTxDigest(110,0,TX_DIGEST);
 
         if(RUN_TX_DIGEST) {
             t1 = new Thread(insertDigestCallable);
             t1.start();
         }
 
-        final Runnable appendCallable = () -> appendToRedo(1);
+        final Runnable appendCallable = () -> appendToRedo(0, REDO_LOG);
         ///final Runnable appendCallable = () -> addTxDigest(110,1);
 
         if(RUN_REDO) {
@@ -118,6 +156,32 @@ public class ParallelTest {
         }
     }
 
+    public void baselineMethod() {
+        final Runnable insertDigestCallable = () -> baselineQuery(0,0,BASELINE1);
+        Thread t1 = new Thread(insertDigestCallable);
+        t1.start();
+        try {
+            Thread.sleep(60);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        final Runnable appendCallable = () -> baselineQuery(0,1,BASELINE2);
+        Thread t2 = new Thread(appendCallable);
+        t2.start();
+
+        try {
+            t1.join();
+            t2.join();
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+            System.exit(1);
+        }
+    }
+
+    public void batchStatementMethod() {
+        batchQuery(110,0, BATCH);
+    }
+
     public void stopServer(){
         if (server != null) {
             server.shutdown();
@@ -129,6 +193,8 @@ public class ParallelTest {
 
     public static void main(String[] args) throws IOException, InterruptedException {
         List<Long> values=new ArrayList<>();
+        List<Long> baselineValues=new ArrayList<>();
+        List<Long> serialValues=new ArrayList<>();
         int iterations = Integer.parseInt(args[0]);
         if(args.length>1) {
             ParallelTest.RUN_TX_DIGEST = Boolean.parseBoolean(args[1]);
@@ -187,6 +253,15 @@ public class ParallelTest {
             test.server.awaitTermination();
         }
         else {
+
+            for (int iter = 0; iter < iterations; iter++) {
+
+                long time = System.nanoTime();
+                test.baselineMethod();
+                long nanosecondTime = System.nanoTime() - time;
+                long millisecond = nanosecondTime / 1000000;
+                baselineValues.add(millisecond);
+            }
             for (int iter = 0; iter < iterations; iter++) {
                 long time = System.nanoTime();
                 test.testMethod();
@@ -194,8 +269,22 @@ public class ParallelTest {
                 long millisecond = nanosecondTime / 1000000;
                 values.add(millisecond);
             }
+            for (int iter = 0; iter < iterations; iter++) {
+                long time = System.nanoTime();
+                test.serialTestMethod();
+                long nanosecondTime = System.nanoTime() - time;
+                long millisecond = nanosecondTime / 1000000;
+                serialValues.add(millisecond);
+            }
+            for (int iter = 0; iter < iterations; iter++) {
+                test.batchStatementMethod();
+            }
         }
         TestUtils.printResults(values,test.results);
+        System.out.println("BASELINE");
+        TestUtils.printResults(baselineValues,new HashMap<>());
+        System.out.println("SERIAL");
+        TestUtils.printResults(serialValues,new HashMap<>());
         System.out.println("EXITING");
         System.exit(0);
     }
