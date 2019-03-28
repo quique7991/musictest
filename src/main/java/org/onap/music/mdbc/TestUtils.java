@@ -65,6 +65,7 @@ public class TestUtils {
             MusicDataStoreHandle.getDSHandle();
             for(int sessionId=0;sessionId<parallelSessions;sessionId++) {
                 SocketOptions options = new SocketOptions();
+                options.setReadTimeoutMillis(3000000).setConnectTimeoutMillis(3000000);
                 options.setTcpNoDelay(true);
                 Cluster cluster = Cluster.builder().withPort(9042)
                     .addContactPoint(MusicUtil.getMyCassaHost())
@@ -552,8 +553,8 @@ public class TestUtils {
                 trace.getRequestType(), trace.getCoordinator(), trace.getDurationMicros(), trace.getStartedAt());
             for (QueryTrace.Event event : trace.getEvents()) {
                 System.out.printf(
-                    "  %d - %s - %s - Timestamp [%d]%n",
-                    event.getSourceElapsedMicros(), event.getSource(), event.getDescription(),event.getTimestamp());
+                    "[%s]  %d - %s - %s - Timestamp [%d]%n",
+                    event.getThreadName(),event.getSourceElapsedMicros(), event.getSource(), event.getDescription(),event.getTimestamp());
             }
             System.out.println("------------------------------------------------------------");
         }

@@ -269,7 +269,6 @@ public class ParallelTest {
                 long millisecond = nanosecondTime / 1000000;
                 values.add(millisecond);
             }
-            /*
             for (int iter = 0; iter < iterations; iter++) {
                 long time = System.nanoTime();
                 test.serialTestMethod();
@@ -279,14 +278,14 @@ public class ParallelTest {
             }
             for (int iter = 0; iter < iterations; iter++) {
                 test.batchStatementMethod();
-            }*/
+            }
         }
         TestUtils.printResults(values,test.results);
         System.out.println("BASELINE");
         TestUtils.printResults(baselineValues,new HashMap<>());
-        /*System.out.println("SERIAL");
+        System.out.println("SERIAL");
         TestUtils.printResults(serialValues,new HashMap<>());
-        System.out.println("EXITING");*/
+        System.out.println("EXITING");
         System.exit(0);
     }
 
