@@ -149,10 +149,7 @@ public class TestUtils {
 
         String cql = String.format("INSERT INTO %s.%s (id,counter) VALUES (?,?);",keyspace,
             table);
-        ArrayList<Object> objects = new ArrayList<>();
-        objects.add(uuid);
-        objects.add(counter);
-        SimpleStatement statement = new SimpleStatement(cql, objects);
+        SimpleStatement statement = new SimpleStatement(cql, uuid,counter);
         return statement;
     }
 
@@ -174,11 +171,7 @@ public class TestUtils {
         }
         String cql = String.format("INSERT INTO %s.%s (txid,transactiondigest,compressed ) VALUES (?,?,?);",KEYSPACE1,
             MTD_TABLE_NAME);
-        ArrayList<Object> objects = new ArrayList<>();
-        objects.add(uuid);
-        objects.add(serializedTransactionDigest);
-        objects.add(false);
-        SimpleStatement statement = new SimpleStatement(cql,objects);
+        SimpleStatement statement = new SimpleStatement(cql,uuid,serializedTransactionDigest,false);
         return statement;
     }
 
