@@ -25,7 +25,6 @@ import java.util.*;
 
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
-import org.onap.music.exceptions.MusicServiceException;
 import org.onap.music.mdbc.TestUtils.MriRow;
 
 public class ParallelTest {
@@ -52,7 +51,7 @@ public class ParallelTest {
     final private String BASELINE2="BASELINE2";
     final private String BATCH="BATCH";
 
-    public ParallelTest(String rangeTableName) throws MusicServiceException {
+    public ParallelTest(String rangeTableName) throws Exception {
         results = new HashMap<>();
         results.put(TX_DIGEST,new ArrayList<>());
         results.put(SERIAL_TX_DIGEST,new ArrayList<>());
@@ -232,7 +231,7 @@ public class ParallelTest {
         ParallelTest test = null;
         try {
             test = new ParallelTest("rangeTable");
-        } catch (MusicServiceException e) {
+        } catch (Exception e) {
             e.printStackTrace();
             System.exit(1);
         }

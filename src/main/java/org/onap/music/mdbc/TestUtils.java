@@ -24,19 +24,12 @@ import com.datastax.driver.core.*;
 import com.datastax.driver.core.policies.DCAwareRoundRobinPolicy;
 import com.datastax.driver.core.querybuilder.Batch;
 import com.datastax.driver.core.utils.UUIDs;
+
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.util.*;
-
-import org.onap.music.datastore.Condition;
-import org.onap.music.datastore.MusicDataStoreHandle;
-import org.onap.music.datastore.PreparedQueryObject;
-import org.onap.music.exceptions.MusicLockingException;
-import org.onap.music.exceptions.MusicQueryException;
-import org.onap.music.exceptions.MusicServiceException;
-import org.onap.music.main.MusicCore;
-import org.onap.music.main.MusicUtil;
-import org.onap.music.main.ResultType;
-import org.onap.music.main.ReturnType;
 
 public class TestUtils {
     final Boolean USE_CASSANDRA;
@@ -54,25 +47,46 @@ public class TestUtils {
     List<Cluster> clusters;
     List<Session> sessions;
 
-    TestUtils(int replicationFactor, Boolean useCassandra, int parallelSessions, Boolean useTracing) throws MusicServiceException {
+   Properties readPropertiesFile(){
+       Properties prop = new Properties();
+       InputStream input = null;
+        try {
+            input = new FileInputStream("music.properties");
+            // load a properties file
+            prop.load(input);
+
+        } catch (IOException ex) {
+            ex.printStackTrace();
+        } finally {
+            if (input != null) {
+                try {
+                    input.close();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+        return prop;
+    }
+
+    TestUtils(int replicationFactor, Boolean useCassandra, int parallelSessions, Boolean useTracing) throws Exception {
         USE_CASSANDRA=useCassandra;
         USE_TRACING=useTracing;
         REPLICATION_FACTOR=replicationFactor;
-        if(USE_CASSANDRA) {
-            clusters = new ArrayList<>();
-            sessions = new ArrayList<>();
-            //Use this just to populate the required field for cassandra
-            MusicDataStoreHandle.getDSHandle();
-            for(int sessionId=0;sessionId<parallelSessions;sessionId++) {
-                SocketOptions options = new SocketOptions();
-                options.setTcpNoDelay(true);
-                Cluster cluster = Cluster.builder().withPort(9042)
-                    .addContactPoint(MusicUtil.getMyCassaHost())
-                    .withLoadBalancingPolicy(
-                        DCAwareRoundRobinPolicy.builder().withLocalDc("dc1").withUsedHostsPerRemoteDc(0).build()
-                    )
-                    .withSocketOptions(options)
-                    .build();
+        Properties prop = readPropertiesFile();
+        clusters = new ArrayList<>();
+        sessions = new ArrayList<>();
+        //Use this just to populate the required field for cassandra
+        for(int sessionId=0;sessionId<parallelSessions;sessionId++) {
+            SocketOptions options = new SocketOptions();
+            options.setTcpNoDelay(true);
+            Cluster cluster = Cluster.builder().withPort(9042)
+                .addContactPoint(prop.getProperty("cassandra.host"))
+                .withLoadBalancingPolicy(
+                    DCAwareRoundRobinPolicy.builder().withLocalDc("dc1").withUsedHostsPerRemoteDc(0).build()
+                )
+                .withSocketOptions(options)
+                .build();
                 /*Cluster cluster = Cluster.builder()
                     .withPort(9042)
                     .withCredentials(MusicUtil.getCassName(), MusicUtil.getCassPwd())
@@ -80,10 +94,9 @@ public class TestUtils {
                     .withSocketOptions(options)
                     .build();*/
 
-                Session session = cluster.connect();
-                clusters.add(cluster);
-                sessions.add(session);
-            }
+            Session session = cluster.connect();
+            clusters.add(cluster);
+            sessions.add(session);
         }
         createKeyspace(KEYSPACE1);
         createKeyspace(KEYSPACE2);
@@ -101,7 +114,7 @@ public class TestUtils {
         }
     }
 
-    private PreparedQueryObject createKeyspaceQuery(String keyspace){
+    private String createKeyspaceQuery(String keyspace){
         Map<String,Object> replicationInfo = new HashMap<>();
         replicationInfo.put("'class'", "'NetworkTopologyStrategy'");
         if(REPLICATION_FACTOR==3){
@@ -114,32 +127,16 @@ public class TestUtils {
             replicationInfo.put("'replication_factor'", REPLICATION_FACTOR);
         }
 
-        PreparedQueryObject queryObject = new PreparedQueryObject();
-        queryObject.appendQueryString(
-            "CREATE KEYSPACE IF NOT EXISTS " + keyspace +
-                " WITH REPLICATION = " + replicationInfo.toString().replaceAll("=", ":"));
-        return queryObject;
+        return  "CREATE KEYSPACE IF NOT EXISTS " + keyspace +
+                " WITH REPLICATION = " + replicationInfo.toString().replaceAll("=", ":");
     }
 
     public void createKeyspace(String keyspace) throws RuntimeException {
-        PreparedQueryObject queryObject = createKeyspaceQuery(keyspace);
-        if(USE_CASSANDRA){
-            executeCassandraWriteQuery(queryObject, 0);
-        }
-        else {
-            try {
-                MusicCore.nonKeyRelatedPut(queryObject, "eventual");
-            } catch (MusicServiceException e) {
-                if (!e.getMessage().equals("Keyspace " + keyspace + " already exists")) {
-                    throw new RuntimeException(
-                        "Error creating namespace: " + keyspace + ". Internal error:" + e.getErrorMessage(),
-                        e);
-                }
-            }
-        }
+        String queryObject = createKeyspaceQuery(keyspace);
+        executeCassandraWriteQuery(new SimpleStatement(queryObject), 0);
     }
 
-    private PreparedQueryObject createBaselineQuery(int version){
+    private SimpleStatement createBaselineQuery(int version){
         if(version>2 || version < 0){
             System.err.println("Invalid baseline query");
             System.exit(1);
@@ -148,60 +145,51 @@ public class TestUtils {
         String table = (version==0)?BASELINE_TABLE1:BASELINE_TABLE2;
         final UUID uuid = generateTimebasedUniqueKey();
         final int counter = 0;
-        PreparedQueryObject query = new PreparedQueryObject();
+
+
         String cql = String.format("INSERT INTO %s.%s (id,counter) VALUES (?,?);",keyspace,
             table);
-        query.appendQueryString(cql);
-        query.addValue(uuid);
-        query.addValue(counter);
-        return query;
+        ArrayList<Object> objects = new ArrayList<>();
+        objects.add(uuid);
+        objects.add(counter);
+        SimpleStatement statement = new SimpleStatement(cql, objects);
+        return statement;
     }
 
     public void hardcodedBaselineQuery(int version, int index){
-        PreparedQueryObject query = createBaselineQuery(version);
+        SimpleStatement query = createBaselineQuery(version);
         //\TODO check if I am not shooting on my own foot
         executeQuorumQuery(index, query);
     }
 
-    private void executeQuorumQuery(int index, PreparedQueryObject query) {
-        if(USE_CASSANDRA) {
-            executeCassandraWriteQuery(query,index);
-        }
-        else {
-            try {
-                MusicCore.nonKeyRelatedPut(query, "critical");
-            } catch (MusicServiceException e) {
-                e.printStackTrace();
-                System.exit(1);
-            }
-        }
+    private void executeQuorumQuery(int index, SimpleStatement query) {
+        executeCassandraWriteQuery(query,index);
     }
 
-    private PreparedQueryObject createAddTransactionQuery(int size){
+    private SimpleStatement createAddTransactionQuery(int size){
         final UUID uuid = generateTimebasedUniqueKey();
         ByteBuffer serializedTransactionDigest = ByteBuffer.allocate(size);
         for(int i=0;i<size;i++){
             serializedTransactionDigest.put((byte)i);
         }
-        PreparedQueryObject query = new PreparedQueryObject();
         String cql = String.format("INSERT INTO %s.%s (txid,transactiondigest,compressed ) VALUES (?,?,?);",KEYSPACE1,
             MTD_TABLE_NAME);
-        query.appendQueryString(cql);
-        query.addValue(uuid);
-        query.addValue(serializedTransactionDigest);
-        query.addValue(false);
-        return query;
+        ArrayList<Object> objects = new ArrayList<>();
+        objects.add(uuid);
+        objects.add(serializedTransactionDigest);
+        objects.add(false);
+        SimpleStatement statement = new SimpleStatement(cql,objects);
+        return statement;
     }
 
     public void hardcodedAddtransaction(int size, int index){
-        PreparedQueryObject query = createAddTransactionQuery(size);
+        SimpleStatement query = createAddTransactionQuery(size);
         //\TODO check if I am not shooting on my own foot
         executeQuorumQuery(index, query);
     }
 
-    private PreparedQueryObject createAppendToRedoQuery(MriRow row){
+    private SimpleStatement createAppendToRedoQuery(MriRow row){
         final UUID uuid = generateTimebasedUniqueKey();
-        PreparedQueryObject query = new PreparedQueryObject();
         StringBuilder appendBuilder = new StringBuilder();
         appendBuilder.append("UPDATE ")
             .append(KEYSPACE2)
@@ -212,15 +200,13 @@ public class TestUtils {
             .append("} WHERE rangeid = ")
             .append(row.mriId)
             .append(";");
-        query.appendQueryString(appendBuilder.toString());
-        return query;
+        SimpleStatement statement = new SimpleStatement(appendBuilder.toString());
+        return statement;
     }
 
     public void hardcodedBatchQuery(MriRow row, int txSize, int index){
-        PreparedQueryObject redoQuery = createAppendToRedoQuery(row);
-        SimpleStatement redoStatement = new SimpleStatement(redoQuery.getQuery(), redoQuery.getValues().toArray());
-        PreparedQueryObject txDigestQuery = createAddTransactionQuery(txSize);
-        SimpleStatement txStatement = new SimpleStatement(txDigestQuery.getQuery(), txDigestQuery.getValues().toArray());
+        SimpleStatement redoStatement = createAppendToRedoQuery(row);
+        SimpleStatement txStatement = createAddTransactionQuery(txSize);
         BatchStatement batchStatement = new BatchStatement();
         batchStatement.add(redoStatement);
         batchStatement.add(txStatement);
@@ -228,43 +214,12 @@ public class TestUtils {
     }
 
     public void hardcodedAppendToRedo(MriRow row, Boolean useCritical, int index) {
-        PreparedQueryObject query = createAppendToRedoQuery(row);
-        if (USE_CASSANDRA){
-            executeCassandraWriteQuery(query,index);
-        }
-        else {
-            if (useCritical) {
-                ReturnType returnType = MusicCore.criticalPut(KEYSPACE2, MRI_TABLE_NAME, row.mriId.toString(),
-                    query, row.lockId, null);
-                if (returnType.getResult().compareTo(ResultType.SUCCESS) != 0) {
-                    System.exit(1);
-                }
-            } else {
-                try {
-                    ResultType critical = MusicCore.nonKeyRelatedPut(query, "critical");
-                    if (critical.compareTo(ResultType.SUCCESS) != 0) {
-                        System.exit(1);
-                    }
-                } catch (MusicServiceException e) {
-                    e.printStackTrace();
-                    System.exit(1);
-                }
-            }
-        }
+        SimpleStatement query = createAppendToRedoQuery(row);
+        executeCassandraWriteQuery(query,index);
     }
 
     private void createTable(String cql, String keyspace, String table) {
-        if (USE_CASSANDRA){
-            executeCassandraTableQuery(cql,0);
-        }
-        else {
-            try {
-                executeMusicTableQuery(keyspace, table, cql);
-            } catch (RuntimeException e) {
-                System.err.println("Initialization error: Failure to create redo records table");
-                throw (e);
-            }
-        }
+        executeCassandraTableQuery(cql,0);
     }
 
 
@@ -343,24 +298,11 @@ public class TestUtils {
     public String createMusicRangeInformation(UUID mriIndex, List<String> tables)
         throws RuntimeException {
         String lockId=null;
-        if(!USE_CASSANDRA) {
-            String fullyQualifiedMriKey = KEYSPACE2 + "." + MRI_TABLE_NAME + "." + mriIndex.toString();
-            int counter = 0;
-            do {
-                lockId = createAndAssignLock(fullyQualifiedMriKey);
-                //TODO: fix this retry logic
-            } while ((lockId == null || lockId.isEmpty()) && (counter++ < 3));
-            if (lockId == null || lockId.isEmpty()) {
-                throw new RuntimeException(
-                    "Error initializing music range information, error creating a lock for a new row" +
-                        "for key " + fullyQualifiedMriKey);
-            }
-        }
         createEmptyMriRow(KEYSPACE2,MRI_TABLE_NAME,mriIndex,"somethingHardcoded", lockId, tables,true);
         return lockId;
     }
 
-    public PreparedQueryObject createEmptyMriRowQuery(UUID id, List<String> tables, String lockId, Boolean isLatest,
+    public SimpleStatement createEmptyMriRowQuery(UUID id, List<String> tables, String lockId, Boolean isLatest,
         String processId){
         StringBuilder insert = new StringBuilder("INSERT INTO ")
             .append(KEYSPACE2)
@@ -385,102 +327,15 @@ public class TestUtils {
             .append(",'")
             .append(processId)
             .append("',{});");
-        PreparedQueryObject query = new PreparedQueryObject();
-        query.appendQueryString(insert.toString());
-        return query;
+        return new SimpleStatement(insert.toString());
     }
 
     public UUID createEmptyMriRow(String musicNamespace, String mriTableName, UUID id, String processId,
         String lockId, List<String> tables, boolean isLatest)
         throws RuntimeException {
-        PreparedQueryObject query = createEmptyMriRowQuery(id,tables,lockId,isLatest,processId);
-        if(!USE_CASSANDRA) {
-            try {
-                executeMusicLockedPut(musicNamespace, mriTableName, id.toString(), query, lockId, null);
-            } catch (RuntimeException e) {
-                throw new RuntimeException("Initialization error:Failure to add new row to transaction information", e);
-            }
-        }
-        else{
-           executeCassandraWriteQuery(query,0);
-        }
+        SimpleStatement query = createEmptyMriRowQuery(id,tables,lockId,isLatest,processId);
+        executeCassandraWriteQuery(query,0);
         return id;
-    }
-
-    protected String createAndAssignLock(String fullyQualifiedKey) throws RuntimeException{
-        String lockId;
-        lockId = MusicCore.createLockReference(fullyQualifiedKey);
-        if(lockId==null) {
-            throw new RuntimeException("lock reference is null");
-        }
-        ReturnType lockReturn;
-        int counter=0;
-        do {
-            if(counter > 0){
-                //TODO: Improve backoff
-                try {
-                    Thread.sleep(50);
-                } catch (InterruptedException e) {
-                    System.out.println("Error sleeping for acquiring the lock");
-                }
-                System.out.println("Error acquiring lock id: ["+lockId+"] for key: ["+fullyQualifiedKey+"]");
-            }
-            lockReturn = acquireLock(fullyQualifiedKey,lockId);
-        }while((lockReturn == null||lockReturn.getResult().compareTo(ResultType.SUCCESS) != 0 )&&(counter++<3));
-        if(lockReturn.getResult().compareTo(ResultType.SUCCESS) != 0 ) {
-            System.err.println("Lock acquire returned invalid error: "+lockReturn.getResult().name());
-            return null;
-        }
-        return lockId;
-    }
-
-    private void executeMusicLockedPut(String namespace, String tableName,
-        String primaryKeyWithoutDomain, PreparedQueryObject queryObject, String lockId,
-        Condition conditionInfo) throws RuntimeException{
-        ReturnType rt ;
-        if(lockId==null) {
-            try {
-                rt = MusicCore.atomicPut(namespace, tableName, primaryKeyWithoutDomain, queryObject, conditionInfo);
-            } catch (MusicLockingException|MusicServiceException|MusicQueryException e) {
-                System.err.println("Something bad happen performing a locked put");
-                throw new RuntimeException("Music locked put failed", e);
-            }
-        }
-        else {
-            rt = MusicCore.criticalPut(namespace, tableName, primaryKeyWithoutDomain, queryObject, lockId, conditionInfo);
-        }
-        if (rt.getResult().getResult().toLowerCase().equals("failure")) {
-            throw new RuntimeException("Music locked put failed");
-        }
-    }
-
-    private ReturnType acquireLock(String fullyQualifiedKey, String lockId) throws RuntimeException{
-        ReturnType lockReturn;
-        //\TODO Handle better failures to acquire locks
-        try {
-            lockReturn = MusicCore.acquireLock(fullyQualifiedKey,lockId);
-        } catch (MusicLockingException|MusicServiceException|MusicQueryException e) {
-            System.err.println("Lock was not acquire correctly for key "+fullyQualifiedKey);
-            throw new RuntimeException("Lock was not acquire correctly for key "+fullyQualifiedKey, e);
-        }
-        return lockReturn;
-    }
-
-    private void executeMusicTableQuery(String keyspace, String table, String cql)
-        throws RuntimeException {
-        PreparedQueryObject pQueryObject = new PreparedQueryObject();
-        pQueryObject.appendQueryString(cql);
-        ResultType rt = null;
-        try {
-            rt = MusicCore.createTable(keyspace,table,pQueryObject,"critical");
-        } catch (MusicServiceException e) {
-            e.printStackTrace();
-            throw new RuntimeException("Error creating table",e );
-        }
-        String result = rt.getResult();
-        if (result==null || result.toLowerCase().equals("failure")) {
-            throw new RuntimeException("Music eventual put failed");
-        }
     }
 
     private void executeCassandraBatchWriteQuery(BatchStatement batchQuery, int sessionIndex){
@@ -498,16 +353,14 @@ public class TestUtils {
         }
     }
 
-    private void executeCassandraWriteQuery(PreparedQueryObject queryObject, int sessionIndex) {
-        SimpleStatement statement;
-        statement = new SimpleStatement(queryObject.getQuery(), queryObject.getValues().toArray());
+    private void executeCassandraWriteQuery(SimpleStatement statement, int sessionIndex) {
         statement.setConsistencyLevel(ConsistencyLevel.QUORUM);
         if(USE_TRACING){
             statement.enableTracing();
         }
         final ResultSet rs = sessions.get(sessionIndex).execute(statement);
         if (!rs.wasApplied()) {
-            System.err.println("Error executing query " + queryObject.getQuery());
+            System.err.println("Error executing query " + statement.getQueryString());
             System.exit(1);
         }
         else if(USE_TRACING){
