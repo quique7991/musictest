@@ -25,6 +25,7 @@ import java.util.*;
 
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import org.onap.music.exceptions.MusicServiceException;
 import org.onap.music.mdbc.TestUtils.MriRow;
 
@@ -43,24 +44,26 @@ public class ParallelTest {
 
     final private MriRow row;
     final private TestUtils utils;
-    final public Map<String,List<Long>> results;
+    final public Map<String,Queue<Long>> results;
     final private String TX_DIGEST="DIGEST";
     final private String SERIAL_TX_DIGEST="S_DIGEST";
     final private String REDO_LOG="REDO";
     final private String SERIAL_REDO_LOG="S_REDO";
     final private String BASELINE1="BASELINE1";
     final private String BASELINE2="BASELINE2";
+    final private String BASELINEPARALLEL="BASELINEPARALLEL";
     final private String BATCH="BATCH";
 
     public ParallelTest(String rangeTableName) throws MusicServiceException {
         results = new HashMap<>();
-        results.put(TX_DIGEST,new ArrayList<>());
-        results.put(SERIAL_TX_DIGEST,new ArrayList<>());
-        results.put(REDO_LOG,new ArrayList<>());
-        results.put(SERIAL_REDO_LOG,new ArrayList<>());
-        results.put(BASELINE1,new ArrayList<>());
-        results.put(BASELINE2,new ArrayList<>());
-        results.put(BATCH,new ArrayList<>());
+        results.put(TX_DIGEST,new ConcurrentLinkedQueue<>());
+        results.put(SERIAL_TX_DIGEST,new ConcurrentLinkedQueue<>());
+        results.put(REDO_LOG,new ConcurrentLinkedQueue<>());
+        results.put(SERIAL_REDO_LOG,new ConcurrentLinkedQueue<>());
+        results.put(BASELINE1,new ConcurrentLinkedQueue<>());
+        results.put(BASELINE2,new ConcurrentLinkedQueue<>());
+        results.put(BASELINEPARALLEL,new ConcurrentLinkedQueue<>());
+        results.put(BATCH,new ConcurrentLinkedQueue<>());
         utils=new TestUtils(REPLICATION_FACTOR,USE_CASSANDRA,PARALLEL_SESSIONS,USE_TRACING);
         utils.createMusicRangeInformationTable();
         utils.createMusicTxDigestTable();
@@ -156,15 +159,51 @@ public class ParallelTest {
         }
     }
 
+    public void parallelJoin(Queue<Long> parallelValues){
+        long time = System.nanoTime();
+        final Runnable insertDigestCallable = () -> baselineQuery(0, 0, BASELINEPARALLEL);
+        final Runnable insertDigestCallable2 = () -> baselineQuery(0, 0, BASELINEPARALLEL);
+        Thread t1 = new Thread(insertDigestCallable);
+        t1.start();
+        Thread t2 = new Thread(insertDigestCallable2);
+        t2.start();
+        try {
+            t1.join();
+            t2.join();
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+            System.exit(1);
+        }
+        long nanosecondTime = System.nanoTime() - time;
+        long millisecond = nanosecondTime / 1000000;
+        parallelValues.add(millisecond);
+    }
+
+     public void parallelMethod(Queue<Long> parallelValues) {
+        int totalThreads=20/2;
+        ArrayList<Thread> threads = new ArrayList<>();
+        for(int i=0; i < totalThreads; i++) {
+            final Runnable parallelQuery = () -> parallelJoin(parallelValues);
+            Thread t1 = new Thread(parallelQuery);
+            t1.start();
+            threads.add(t1);
+        }
+        for(Thread t : threads){
+            try {
+                t.join();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+                System.exit(1);
+            }
+        }
+    }
+
+
     public void baselineMethod() {
         final Runnable insertDigestCallable = () -> baselineQuery(0,0,BASELINE1);
         Thread t1 = new Thread(insertDigestCallable);
         t1.start();
-        try {
-            Thread.sleep(60);
-        } catch (InterruptedException e) {
-            e.printStackTrace();
-        }
+
         final Runnable appendCallable = () -> baselineQuery(0,1,BASELINE2);
         Thread t2 = new Thread(appendCallable);
         t2.start();
@@ -195,6 +234,7 @@ public class ParallelTest {
         List<Long> values=new ArrayList<>();
         List<Long> baselineValues=new ArrayList<>();
         List<Long> serialValues=new ArrayList<>();
+        Queue<Long> parallelValues=new ConcurrentLinkedQueue<>();
         int iterations = Integer.parseInt(args[0]);
         if(args.length>1) {
             ParallelTest.RUN_TX_DIGEST = Boolean.parseBoolean(args[1]);
@@ -256,6 +296,10 @@ public class ParallelTest {
 
             for (int iter = 0; iter < iterations; iter++) {
 
+                test.parallelMethod(parallelValues);
+            }
+            for (int iter = 0; iter < iterations; iter++) {
+
                 long time = System.nanoTime();
                 test.baselineMethod();
                 long nanosecondTime = System.nanoTime() - time;
@@ -285,6 +329,8 @@ public class ParallelTest {
         TestUtils.printResults(baselineValues,new HashMap<>());
         System.out.println("SERIAL");
         TestUtils.printResults(serialValues,new HashMap<>());
+        System.out.println("PARALLEL");
+        TestUtils.printResults(new ArrayList<>(parallelValues),new HashMap<>());
         System.out.println("EXITING");
         System.exit(0);
     }

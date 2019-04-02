@@ -26,6 +26,7 @@ import java.util.Map;
 
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
+import java.util.Queue;
 import org.json.*;
 import org.onap.music.mdbc.proto.Ack;
 import org.onap.music.mdbc.proto.Empty;
@@ -34,7 +35,7 @@ import org.onap.music.mdbc.proto.TestServiceGrpc;
 public class Controller {
 
     public static void main(String[] args){
-        Map<String,List<Long>> results = new HashMap<>();
+        Map<String, Queue<Long>> results = new HashMap<>();
         List<Long> values=new ArrayList<>();
         List<ManagedChannel> channels = new ArrayList<>();
         List<TestServiceGrpc.TestServiceBlockingStub> stubs = new ArrayList<>();

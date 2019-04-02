@@ -564,18 +564,25 @@ public class TestUtils {
             System.err.println("Error print tracing information");
         }
     }
+    private static long Percentile(List<Long> latencies, double Percentile) {
+        int Index = (int)Math.ceil((Percentile / (double)100) * (double)latencies.size());
+        return latencies.get(Index-1);
+    }
 
-    public static void printResults(List<Long> values,Map<String,List<Long>> results){
+    public static void printResults(List<Long> values,Map<String,Queue<Long>> results){
+        Collections.sort(values);
         final LongSummaryStatistics longSummaryStatistics = values.stream().mapToLong((x) -> x).summaryStatistics();
-        System.out.println("Operation\t\t\tMin\t\t\tAvg\t\t\tMax\t\t\t");
-        printStats("Total",longSummaryStatistics);
-        for(Map.Entry<String,List<Long>> e:results.entrySet()){
+        System.out.println("Operation\t\t\tMin\t\t\tAvg\t\t\tMax\t\t\tP10\t\t\tP25\t\t\tP50\t\t\tP75\t\t\tP90\t\t\tP99");
+        printStats("Total",longSummaryStatistics,values);
+        for(Map.Entry<String,Queue<Long>> e:results.entrySet()){
+            List<Long> valueList = new ArrayList(e.getValue());
+            Collections.sort(valueList);
             LongSummaryStatistics longSummaryStatisticsTemp = e.getValue().stream().mapToLong((x) -> x).summaryStatistics();
-            printStats(e.getKey(),longSummaryStatisticsTemp);
+            printStats(e.getKey(),longSummaryStatisticsTemp,valueList);
         }
     }
 
-    private static void printStats(String operation, LongSummaryStatistics statistics) {
+    private static void printStats(String operation, LongSummaryStatistics statistics, List<Long> sortedList) {
         System.out.print(operation);
         System.out.print("\t\t\t");
         System.out.print(statistics.getMin() + "ms");
@@ -583,6 +590,19 @@ public class TestUtils {
         System.out.print(statistics.getAverage() + "ms");
         System.out.print("\t\t\t");
         System.out.print(statistics.getMax() + "ms");
+        System.out.print("\t\t\t");
+        System.out.print(Percentile(sortedList,10.0) + "ms");
+        System.out.print("\t\t\t");
+        System.out.print(Percentile(sortedList,25.0) + "ms");
+        System.out.print("\t\t\t");
+        System.out.print(Percentile(sortedList,50.0) + "ms");
+        System.out.print("\t\t\t");
+        System.out.print(Percentile(sortedList,75.0) + "ms");
+        System.out.print("\t\t\t");
+        System.out.print(Percentile(sortedList,90.0) + "ms");
+        System.out.print("\t\t\t");
+        System.out.print(Percentile(sortedList,99.0) + "ms");
+        System.out.print("\n");
         System.out.print("\n");
     }
 }
